@@ -32,21 +32,24 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "httcp is running\n\n")
 
-		fmt.Fprint(w, "/{proto}/{address} - returns a one time password in plain text\n")
-		fmt.Fprint(w, "example: GET /tcp/us.litecoinpool.org:3333 -> 10f880d9\n\n")
-
-		fmt.Fprint(w, "/{otp} - takes body content and sends it to connection\n")
-		fmt.Fprint(w, "example: GET /10f880d9 -> sends body to server and reads server and returns as plain text")
+		fmt.Fprintln(w, "GET /{proto}/{address} - returns a one time password in plain text that identities your connection")
+		fmt.Fprintln(w, "POST /{otp} - takes body content and sends it to connection")
+		fmt.Fprintln(w, "GET /{otp} - will read connection and return it as plain text")
 	})
 	http.HandleFunc("/{proto}/{address}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
+
+		if r.Method != http.MethodGet {
+			codeWrite(w, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
+			return
+		}
 
 		proto := r.PathValue("proto")
 		address := r.PathValue("address")
 
 		conn, err := net.Dial(proto, address)
 		if err != nil {
-			serverError(w, err, http.StatusInternalServerError)
+			codeWrite(w, err, http.StatusInternalServerError)
 			return
 		}
 
@@ -54,7 +57,7 @@ func main() {
 
 		_, err = rand.Read(bytes)
 		if err != nil {
-			serverError(w, err, http.StatusInternalServerError)
+			codeWrite(w, err, http.StatusInternalServerError)
 			return
 		}
 		otp := hex.EncodeToString(bytes)
@@ -74,38 +77,44 @@ func main() {
 		otp := r.PathValue("otp")
 
 		if otp == "" {
-			serverError(w, fmt.Errorf("otp empty"), http.StatusBadRequest)
+			codeWrite(w, fmt.Errorf("otp empty"), http.StatusBadRequest)
 			return
 		}
 		if users[otp] == nil {
-			serverError(w, fmt.Errorf("invalid otp"), http.StatusForbidden)
+			codeWrite(w, fmt.Errorf("invalid otp"), http.StatusForbidden)
 			return
 		}
 
 		user := users[otp]
 		user.lastReq = time.Now()
 
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			serverError(w, err, http.StatusInternalServerError)
-			return
-		}
-
-		if len(body) > 0 {
-			if _, err := user.conn.Write(body); err != nil {
-				serverError(w, err, http.StatusInternalServerError)
+		switch r.Method {
+		case http.MethodGet:
+			buffer := make([]byte, 4096)
+			n, err := user.conn.Read(buffer)
+			if err != nil {
+				codeWrite(w, err, http.StatusInternalServerError)
 				return
 			}
-		}
 
-		buffer := make([]byte, 4096)
-		n, err := user.conn.Read(buffer)
-		if err != nil {
-			serverError(w, err, http.StatusInternalServerError)
+			w.Write(buffer[:n])
+		case http.MethodPost:
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				codeWrite(w, err, http.StatusInternalServerError)
+				return
+			}
+
+			if _, err := user.conn.Write(body); err != nil {
+				codeWrite(w, err, http.StatusInternalServerError)
+				return
+			}
+
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			codeWrite(w, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
 			return
 		}
-
-		w.Write(buffer[:n])
 	})
 
 	go func() {
@@ -126,7 +135,7 @@ func main() {
 	http.ListenAndServe(port, nil)
 }
 
-func serverError(w http.ResponseWriter, err error, statusCode int) {
+func codeWrite(w http.ResponseWriter, err error, statusCode int) {
 	w.WriteHeader(statusCode)
 	fmt.Fprint(w, err)
 }
