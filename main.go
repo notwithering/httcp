@@ -32,7 +32,7 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "httcp is running\n\n")
 
-		fmt.Fprintln(w, "GET /{proto}/{address} - returns a one time password in plain text that identities your connection")
+		fmt.Fprintln(w, "GET /{proto}/{address} - returns a one time password in plain text that identifies your connection")
 		fmt.Fprintln(w, "POST /{otp} - takes body content and sends it to connection")
 		fmt.Fprintln(w, "GET /{otp} - will read connection and return it as plain text")
 	})
