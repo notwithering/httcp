@@ -54,13 +54,20 @@ func main() {
 		}
 
 		bytes := make([]byte, hex.DecodedLen(otpLength))
+		var otp string
 
-		_, err = rand.Read(bytes)
-		if err != nil {
-			codeWrite(w, err, http.StatusInternalServerError)
-			return
+		for {
+			_, err = rand.Read(bytes)
+			if err != nil {
+				codeWrite(w, err, http.StatusInternalServerError)
+				return
+			}
+			otp = hex.EncodeToString(bytes)
+
+			if users[otp] == nil {
+				break
+			}
 		}
-		otp := hex.EncodeToString(bytes)
 
 		mu.Lock()
 		users[otp] = &user{
