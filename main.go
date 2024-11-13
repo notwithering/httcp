@@ -33,7 +33,8 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "httcp is running\n\n")
 
-		fmt.Fprintln(w, "GET /{proto}/{address} - returns a one time password in plain text that identifies your connection")
+		fmt.Fprintln(w, "GET /json/info - provides info about the format the server will respond to you with")
+		fmt.Fprintln(w, "GET /tcp/{address} - returns a one time password in plain text that identifies your connection")
 		fmt.Fprintln(w, "POST /{otp} - takes body content and sends it to connection")
 		fmt.Fprintln(w, "GET /{otp} - will read connection and return it as plain text")
 	})
@@ -45,13 +46,12 @@ func main() {
 			return
 		}
 
-		proto := r.PathValue("proto")
 		address := r.PathValue("address")
 
-		vbLog(fmt.Sprintf("dialing %s://%s", proto, address))
-		conn, err := net.Dial(proto, address)
+		vbLog(fmt.Sprintf("dialing tcp://%s", address))
+		conn, err := net.Dial("tcp", address)
 		if err != nil {
-			vbLog(fmt.Sprintf("could not dial %s://%s:", proto, address), err)
+			vbLog(fmt.Sprintf("could not dial tcp://%s:", address), err)
 			codeWrite(w, r, err, http.StatusInternalServerError)
 			return
 		}
@@ -140,6 +140,16 @@ func main() {
 			codeWrite(w, r, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
 			return
 		}
+	})
+	http.HandleFunc("/json/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method != http.MethodGet {
+			codeWrite(w, r, fmt.Errorf(`{"code":1,"error":"405: method not allowed"}`), http.StatusMethodNotAllowed)
+			return
+		}
+
+		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f}}`, otpLength, expiry.Seconds())
 	})
 
 	go func() {
