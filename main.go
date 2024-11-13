@@ -154,10 +154,10 @@ func main() {
 
 	go func() {
 		for range time.NewTicker(expiryCheckInterval).C {
-			vbLog("preforming routine expiry check")
-
 			mu.Lock()
 			vbLog("locked mutex")
+
+			vbLog("preforming routine expiry check")
 
 			for otp, user := range users {
 				if time.Since(user.lastReq) > expiry {
