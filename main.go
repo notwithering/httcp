@@ -38,7 +38,7 @@ func main() {
 		fmt.Fprintln(w, "POST /{otp} - takes body content and sends it to connection")
 		fmt.Fprintln(w, "GET /{otp} - will read connection and return it as plain text")
 	})
-	http.HandleFunc("/{proto}/{address}", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/tcp/{address}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
 		if r.Method != http.MethodGet {
