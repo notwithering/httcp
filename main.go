@@ -23,6 +23,7 @@ var cli struct {
 	TTL                 time.Duration `help:"How long a stale connection can live." short:"T" default:"5m"`
 	ExpiryCheckInterval time.Duration `help:"How long to wait before checking for stale connections again." short:"E" default:"1m"`
 	Verbose             bool          `help:"Print more messages." short:"v"`
+	Password            string        `help:"Require password parameter in requests." short:"P" default:""`
 }
 
 var (
@@ -40,16 +41,28 @@ var kctx *kong.Context
 func main() {
 	kctx = kong.Parse(&cli)
 
+	if cli.Password == "password" {
+		fmt.Println("warning: the password \"password\" is shown explicitly as an example at website root. very insecure password")
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "httcp is running\n\n")
 
-		fmt.Fprintln(w, "GET /json/info - provides info about the inner workings of the server that you may want to know")
-		fmt.Fprintln(w, "GET /tcp/{address} - returns a one time password in plain text that identifies your connection")
-		fmt.Fprintln(w, "POST /{otp} - takes body content and sends it to connection")
-		fmt.Fprintln(w, "GET /{otp} - will read connection and return it as plain text")
+		fmt.Fprint(w, "GET /json/info - provides info about the inner workings of the server that you may want to know\n")
+		fmt.Fprint(w, "GET /tcp/{address} - returns a one time password in plain text that identifies your connection\n")
+		fmt.Fprint(w, "POST /{otp} - takes body content and sends it to connection\n")
+		fmt.Fprint(w, "GET /{otp} - will read connection and return it as plain text\n")
+
+		if cli.Password != "" {
+			fmt.Fprint(w, "\nserver requires password \"auth\" parameter (e.g. ?auth=password)")
+		}
 	})
 	http.HandleFunc("/tcp/{address}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
+
+		if !auth(w, r) {
+			return
+		}
 
 		if r.Method != http.MethodGet {
 			codeWrite(w, r, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
@@ -103,6 +116,10 @@ func main() {
 	})
 	http.HandleFunc("/{otp}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
+
+		if !auth(w, r) {
+			return
+		}
 
 		otp := r.PathValue("otp")
 
@@ -159,7 +176,7 @@ func main() {
 			return
 		}
 
-		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f}}`, cli.OTPLength, cli.TTL.Seconds())
+		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f},"requirePassword":%v}`, cli.OTPLength, cli.TTL.Seconds(), cli.Password != "")
 	})
 
 	go func() {
@@ -201,4 +218,25 @@ func vbLog(a ...any) {
 
 	fmt.Printf("[%s] ", time.Now().Format(time.DateTime))
 	fmt.Println(a...)
+}
+
+func auth(w http.ResponseWriter, r *http.Request) bool {
+	authed := func() bool {
+		if cli.Password == "" {
+			return true
+		}
+
+		auth := r.URL.Query().Get("auth")
+		if auth != cli.Password {
+			return false
+		}
+
+		return true
+	}()
+
+	if !authed {
+		http.Error(w, "401: unauthorized", http.StatusUnauthorized)
+	}
+
+	return authed
 }
