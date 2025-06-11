@@ -9,15 +9,21 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/alecthomas/kong"
 )
 
-const (
-	port                string        = ":8080"
-	otpLength           int           = 8
-	expiry              time.Duration = 5 * time.Minute
-	expiryCheckInterval time.Duration = time.Minute
-	verbose             bool          = true
-)
+var cli struct {
+	Host                string        `help:"The host to bind to." short:"h" env:"HOST" default:"0.0.0.0"`
+	Port                string        `help:"The port to serve." short:"p" env:"PORT" default:"8080"`
+	TLS                 bool          `help:"Enable TLS." short:"t"`
+	Cert                string        `help:"Path to TLS certificate file." short:"c" env:"TLS_CERT" type:"existingfile"`
+	Key                 string        `help:"Path to TLS key file." short:"k" env:"TLS_KEY" type:"existingfile"`
+	OTPLength           int           `help:"Length of one-time password." short:"o" default:"8"`
+	TTL                 time.Duration `help:"How long a stale connection can live." short:"T" default:"5m"`
+	ExpiryCheckInterval time.Duration `help:"How long to wait before checking for stale connections again." short:"E" default:"1m"`
+	Verbose             bool          `help:"Print more messages." short:"v"`
+}
 
 var (
 	users = make(map[string]*user)
@@ -29,7 +35,11 @@ type user struct {
 	lastReq time.Time
 }
 
+var kctx *kong.Context
+
 func main() {
+	kctx = kong.Parse(&cli)
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "httcp is running\n\n")
 
@@ -56,7 +66,7 @@ func main() {
 			return
 		}
 
-		bytes := make([]byte, hex.DecodedLen(otpLength))
+		bytes := make([]byte, hex.DecodedLen(cli.OTPLength))
 		var otp string
 
 		vbLog("generating otp")
@@ -149,18 +159,18 @@ func main() {
 			return
 		}
 
-		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f}}`, otpLength, expiry.Seconds())
+		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f}}`, cli.OTPLength, cli.TTL.Seconds())
 	})
 
 	go func() {
-		for range time.NewTicker(expiryCheckInterval).C {
+		for range time.NewTicker(cli.ExpiryCheckInterval).C {
 			mu.Lock()
 			vbLog("locked mutex")
 
 			vbLog("preforming routine expiry check")
 
 			for otp, user := range users {
-				if time.Since(user.lastReq) > expiry {
+				if time.Since(user.lastReq) > cli.TTL {
 					user.conn.Close()
 					vbLog(fmt.Sprintf("closed user %s conn", otp))
 					delete(users, otp)
@@ -175,7 +185,7 @@ func main() {
 
 	vbLog("started server")
 
-	http.ListenAndServe(port, nil)
+	http.ListenAndServe(cli.Host+":"+cli.Port, nil)
 }
 
 func codeWrite(w http.ResponseWriter, r *http.Request, err error, statusCode int) {
@@ -185,7 +195,7 @@ func codeWrite(w http.ResponseWriter, r *http.Request, err error, statusCode int
 }
 
 func vbLog(a ...any) {
-	if !verbose {
+	if !cli.Verbose {
 		return
 	}
 
