@@ -159,7 +159,7 @@ func main() {
 	http.HandleFunc("/write/{otp}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
-		if checkMethod(w, r, http.MethodGet) {
+		if checkMethod(w, r, http.MethodPost) {
 			return
 		}
 
@@ -192,7 +192,7 @@ func main() {
 	http.HandleFunc("/ping/{otp}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
-		if checkMethod(w, r, http.MethodGet) {
+		if checkMethod(w, r, http.MethodPost) {
 			return
 		}
 
