@@ -46,6 +46,11 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+
 		fmt.Fprint(w, "httcp is running\n\n")
 
 		fmt.Fprint(w, "GET /json/info - provides info about the inner workings of the server that you may want to know\n")
