@@ -42,30 +42,14 @@ func main() {
 	kctx = kong.Parse(&cli)
 
 	if cli.Password == "password" {
-		fmt.Println("warning: the password \"password\" is shown explicitly as an example at website root. very insecure password")
+		log(0, "the password \"password\" is shown explicitly as an example at website root. very insecure password")
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-
-		fmt.Fprint(w, "httcp is running\n\n")
-
-		fmt.Fprint(w, "GET /json/info - provides info about the inner workings of the server that you may want to know\n")
-		fmt.Fprint(w, "GET /tcp/{address} - returns a one time password in plain text that identifies your connection\n")
-		fmt.Fprint(w, "POST /{otp} - takes body content and sends it to connection\n")
-		fmt.Fprint(w, "GET /{otp} - will read connection and return it as plain text\n")
-
-		if cli.Password != "" {
-			fmt.Fprint(w, "\nserver requires password \"auth\" parameter (e.g. ?auth=password)")
-		}
-	})
-	http.HandleFunc("/tcp/{address}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
-		if !auth(w, r) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
 			return
 		}
 
@@ -74,12 +58,35 @@ func main() {
 			return
 		}
 
+		fmt.Fprint(w, "httcp is running\n\n")
+
+		fmt.Fprint(w, "GET  /info          - returns server info in json\n")
+		fmt.Fprint(w, "GET  /new/{address} - creates a new connection and returns a one-time password\n")
+		fmt.Fprint(w, "GET  /read/{otp}    - recieve data from connection\n")
+		fmt.Fprint(w, "POST /write/{otp}   - send data to connection\n")
+		fmt.Fprint(w, "POST /ping/{otp}    - reset connection timeout\n")
+
+		if cli.Password != "" {
+			fmt.Fprint(w, "\nserver requires password \"auth\" parameter (e.g. ?auth=password)")
+		}
+	})
+	http.HandleFunc("/new/{address}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+
+		if checkMethod(w, r, http.MethodGet) {
+			return
+		}
+
+		if !isAuthed(w, r) {
+			return
+		}
+
 		address := r.PathValue("address")
 
-		vbLog(fmt.Sprintf("dialing tcp://%s", address))
+		log(1, fmt.Sprintf("dialing tcp://%s", address))
 		conn, err := net.Dial("tcp", address)
 		if err != nil {
-			vbLog(fmt.Sprintf("could not dial tcp://%s:", address), err)
+			log(1, fmt.Sprintf("could not dial tcp://%s:", address), err)
 			codeWrite(w, r, err, http.StatusInternalServerError)
 			return
 		}
@@ -87,12 +94,12 @@ func main() {
 		bytes := make([]byte, hex.DecodedLen(cli.OTPLength))
 		var otp string
 
-		vbLog("generating otp")
+		log(1, "generating otp")
 
 		for {
 			_, err = rand.Read(bytes)
 			if err != nil {
-				vbLog("error while reading rand:", err)
+				log(1, "error while reading rand:", err)
 				codeWrite(w, r, err, http.StatusInternalServerError)
 				return
 			}
@@ -102,82 +109,110 @@ func main() {
 				break
 			}
 
-			vbLog(fmt.Sprintf("otp %s already exists, regenerating", otp))
+			log(1, fmt.Sprintf("otp %s already exists, regenerating", otp))
 		}
 
 		mu.Lock()
-		vbLog("locked mutex")
+		log(1, "locked mutex")
 
-		vbLog(fmt.Sprintf("assigning user %s to slice", otp))
+		log(1, fmt.Sprintf("assigning user %s to slice", otp))
 		users[otp] = &user{
 			conn:    conn,
 			lastReq: time.Now(),
 		}
 
 		mu.Unlock()
-		vbLog("unlocked mutex")
+		log(1, "unlocked mutex")
 
 		fmt.Fprint(w, otp)
 	})
-	http.HandleFunc("/{otp}", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/read/{otp}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
-		if !auth(w, r) {
+		if checkMethod(w, r, http.MethodGet) {
 			return
 		}
 
-		otp := r.PathValue("otp")
-
-		if otp == "" {
-			codeWrite(w, r, fmt.Errorf("otp empty"), http.StatusBadRequest)
-			return
-		}
-		if users[otp] == nil {
-			codeWrite(w, r, fmt.Errorf("invalid otp"), http.StatusForbidden)
+		if !isAuthed(w, r) {
 			return
 		}
 
-		user := users[otp]
-		user.lastReq = time.Now()
-
-		switch r.Method {
-		case http.MethodGet:
-			vbLog("reading user conn")
-
-			buffer := make([]byte, 4096)
-			n, err := user.conn.Read(buffer)
-			if err != nil {
-				codeWrite(w, r, err, http.StatusInternalServerError)
-				return
-			}
-
-			vbLog("writing user conn buffer to user")
-			w.Write(buffer[:n])
-		case http.MethodPost:
-			vbLog("reading request body")
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				codeWrite(w, r, err, http.StatusInternalServerError)
-				return
-			}
-
-			vbLog("writing request body to user conn")
-			if _, err := user.conn.Write(body); err != nil {
-				codeWrite(w, r, err, http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			codeWrite(w, r, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
+		u, exit := getUser(w, r)
+		if exit {
 			return
 		}
+
+		u.lastReq = time.Now()
+
+		log(1, "reading user conn")
+
+		buffer := make([]byte, 4096)
+		n, err := u.conn.Read(buffer)
+		if err != nil {
+			codeWrite(w, r, err, http.StatusInternalServerError)
+			return
+		}
+
+		log(1, "writing user conn buffer to user")
+		w.Write(buffer[:n])
 	})
-	http.HandleFunc("/json/info", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/write/{otp}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+
+		if checkMethod(w, r, http.MethodGet) {
+			return
+		}
+
+		if !isAuthed(w, r) {
+			return
+		}
+
+		u, exit := getUser(w, r)
+		if exit {
+			return
+		}
+
+		u.lastReq = time.Now()
+
+		log(1, "reading request body")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			codeWrite(w, r, err, http.StatusInternalServerError)
+			return
+		}
+
+		log(1, "writing request body to user conn")
+		if _, err := u.conn.Write(body); err != nil {
+			codeWrite(w, r, err, http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+	http.HandleFunc("/ping/{otp}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+
+		if checkMethod(w, r, http.MethodGet) {
+			return
+		}
+
+		if !isAuthed(w, r) {
+			return
+		}
+
+		u, exit := getUser(w, r)
+		if exit {
+			return
+		}
+
+		u.lastReq = time.Now()
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+	http.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if r.Method != http.MethodGet {
-			codeWrite(w, r, fmt.Errorf(`{"code":1,"error":"405: method not allowed"}`), http.StatusMethodNotAllowed)
+		if checkMethod(w, r, http.MethodGet) {
 			return
 		}
 
@@ -187,45 +222,39 @@ func main() {
 	go func() {
 		for range time.NewTicker(cli.ExpiryCheckInterval).C {
 			mu.Lock()
-			vbLog("locked mutex")
+			log(1, "locked mutex")
 
-			vbLog("preforming routine expiry check")
+			log(1, "preforming routine expiry check")
 
 			for otp, user := range users {
 				if time.Since(user.lastReq) > cli.TTL {
 					user.conn.Close()
-					vbLog(fmt.Sprintf("closed user %s conn", otp))
+					log(1, fmt.Sprintf("closed user %s conn", otp))
 					delete(users, otp)
-					vbLog("deleted user", otp)
+					log(1, "deleted user", otp)
 				}
 			}
 
 			mu.Unlock()
-			vbLog("unlocked mutex")
+			log(1, "unlocked mutex")
 		}
 	}()
 
-	vbLog("started server")
+	log(1, "started server")
 
 	http.ListenAndServe(cli.Host+":"+cli.Port, nil)
 }
 
-func codeWrite(w http.ResponseWriter, r *http.Request, err error, statusCode int) {
-	vbLog(fmt.Sprintf("%s <- %s", r.RemoteAddr, err.Error()))
-	w.WriteHeader(statusCode)
-	fmt.Fprint(w, err)
-}
-
-func vbLog(a ...any) {
-	if !cli.Verbose {
-		return
+func checkMethod(w http.ResponseWriter, r *http.Request, meth string) (exit bool) {
+	if r.Method != meth {
+		codeWrite(w, r, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
+		return true
 	}
 
-	fmt.Printf("[%s] ", time.Now().Format(time.DateTime))
-	fmt.Println(a...)
+	return false
 }
 
-func auth(w http.ResponseWriter, r *http.Request) bool {
+func isAuthed(w http.ResponseWriter, r *http.Request) bool {
 	authed := func() bool {
 		if cli.Password == "" {
 			return true
@@ -244,4 +273,43 @@ func auth(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	return authed
+}
+
+func getUser(w http.ResponseWriter, r *http.Request) (user *user, exit bool) {
+	exit = true
+	otp := r.PathValue("otp")
+
+	if otp == "" {
+		codeWrite(w, r, fmt.Errorf("otp empty"), http.StatusBadRequest)
+		return
+	}
+	if users[otp] == nil {
+		codeWrite(w, r, fmt.Errorf("invalid otp"), http.StatusForbidden)
+		return
+	}
+
+	user = users[otp]
+	return user, false
+}
+
+func codeWrite(w http.ResponseWriter, r *http.Request, err error, statusCode int) {
+	log(1, fmt.Sprintf("%s <- %s", r.RemoteAddr, err.Error()))
+	w.WriteHeader(statusCode)
+	fmt.Fprint(w, err)
+}
+
+func log(level int, a ...any) {
+	var verbosity int
+	for i, l := range []bool{true /*no verbosity*/, cli.Verbose} { // will eventually add very verbose flag
+		if l {
+			verbosity = i
+		}
+	}
+
+	if level > verbosity {
+		return
+	}
+
+	fmt.Printf("[%s] ", time.Now().Format(time.DateTime))
+	fmt.Println(a...)
 }
