@@ -23,6 +23,7 @@ var cli struct {
 	TTL                 time.Duration `help:"How long a stale connection can live." short:"T" default:"5m"`
 	ExpiryCheckInterval time.Duration `help:"How long to wait before checking for stale connections again." short:"E" default:"1m"`
 	Verbose             bool          `help:"Print more messages." short:"v"`
+	VeryVerbose         bool          `help:"Print even more messages." short:"V"`
 	Password            string        `help:"Require password parameter in requests." short:"P" default:""`
 }
 
@@ -39,6 +40,7 @@ type user struct {
 var kctx *kong.Context
 
 func main() {
+	log(2, "parsing flags")
 	kctx = kong.Parse(&cli)
 
 	if cli.Password == "password" {
@@ -49,12 +51,12 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain")
 
 		if r.URL.Path != "/" {
+			log(1, "%s not found", r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
 
-		if r.Method != http.MethodGet {
-			codeWrite(w, r, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
+		if checkMethod(w, r, http.MethodGet) {
 			return
 		}
 
@@ -93,10 +95,9 @@ func main() {
 
 		address := r.PathValue("address")
 
-		log(1, fmt.Sprintf("dialing tcp://%s", address))
+		log(1, "dialing tcp://%s", address)
 		conn, err := net.Dial("tcp", address)
 		if err != nil {
-			log(1, fmt.Sprintf("could not dial tcp://%s:", address), err)
 			codeWrite(w, r, err, http.StatusInternalServerError)
 			return
 		}
@@ -109,7 +110,7 @@ func main() {
 		for {
 			_, err = rand.Read(bytes)
 			if err != nil {
-				log(1, "error while reading rand:", err)
+				log(1, "error while reading rand: %v", err)
 				codeWrite(w, r, err, http.StatusInternalServerError)
 				return
 			}
@@ -119,20 +120,22 @@ func main() {
 				break
 			}
 
-			log(1, fmt.Sprintf("otp %s already exists, regenerating", otp))
+			log(1, "otp %s already exists, regenerating", otp)
 		}
 
+		log(2, "locking mutex")
 		mu.Lock()
-		log(1, "locked mutex")
+		log(2, "locked mutex")
 
-		log(1, fmt.Sprintf("assigning user %s to slice", otp))
+		log(1, "assigning user %s to map", otp)
 		users[otp] = &user{
 			conn:    conn,
 			lastReq: time.Now(),
 		}
 
+		log(2, "unlocking mutex")
 		mu.Unlock()
-		log(1, "unlocked mutex")
+		log(2, "unlocked mutex")
 
 		fmt.Fprint(w, otp)
 	})
@@ -218,6 +221,7 @@ func main() {
 		}
 		u := users[otp]
 
+		log(1, "setting user %s lastReq to now", otp)
 		u.lastReq = time.Now()
 
 		w.WriteHeader(http.StatusNoContent)
@@ -239,43 +243,69 @@ func main() {
 		}
 		u := users[otp]
 
+		log(1, "closing user %s conn", otp)
 		u.conn.Close()
 
+		log(2, "locking mutex")
 		mu.Lock()
+		log(2, "locked mutex")
+
 		users[otp] = nil
+
+		log(2, "unlocking mutex")
 		mu.Unlock()
+		log(2, "unlocked mutex")
 
 		w.WriteHeader(http.StatusNoContent)
 	})
 
 	go func() {
 		for range time.NewTicker(cli.ExpiryCheckInterval).C {
+			log(2, "locking mutex")
 			mu.Lock()
-			log(1, "locked mutex")
+			log(2, "locked mutex")
 
 			log(1, "preforming routine expiry check")
 
 			for otp, user := range users {
 				if time.Since(user.lastReq) > cli.TTL {
+					log(1, "closing user %s conn", otp)
 					user.conn.Close()
-					log(1, fmt.Sprintf("closed user %s conn", otp))
+					log(1, "deleting user %s", otp)
 					delete(users, otp)
-					log(1, "deleted user", otp)
 				}
 			}
 
+			log(2, "unlocking mutex")
 			mu.Unlock()
-			log(1, "unlocked mutex")
+			log(2, "unlocked mutex")
 		}
 	}()
 
 	log(1, "started server")
-
 	http.ListenAndServe(cli.Host+":"+cli.Port, nil)
+}
+
+func log(level int, format string, a ...any) {
+	var verbosity int
+	for i, l := range []bool{true /*no verbosity*/, cli.Verbose, cli.VeryVerbose} {
+		if l {
+			verbosity = i
+		}
+	}
+
+	if level > verbosity {
+		return
+	}
+
+	fmt.Printf("[%s] ", time.Now().Format(time.DateTime))
+	fmt.Printf(format, a...)
+	fmt.Print("\n")
 }
 
 func checkMethod(w http.ResponseWriter, r *http.Request, meth string) (exit bool) {
 	if r.Method != meth {
+		log(1, "%s method not allowed on %s", r.Method, r.URL.Path)
 		codeWrite(w, r, fmt.Errorf("405: method not allowed"), http.StatusMethodNotAllowed)
 		return true
 	}
@@ -286,11 +316,13 @@ func checkMethod(w http.ResponseWriter, r *http.Request, meth string) (exit bool
 func isAuthed(w http.ResponseWriter, r *http.Request) bool {
 	authed := func() bool {
 		if cli.Password == "" {
+			log(1, "auth param empty")
 			return true
 		}
 
 		auth := r.URL.Query().Get("auth")
 		if auth != cli.Password {
+			log(1, "auth param %s != password", auth)
 			return false
 		}
 
@@ -321,23 +353,7 @@ func getOTP(w http.ResponseWriter, r *http.Request) (otp string, exit bool) {
 }
 
 func codeWrite(w http.ResponseWriter, r *http.Request, err error, statusCode int) {
-	log(1, fmt.Sprintf("%s <- %s", r.RemoteAddr, err.Error()))
+	log(1, "%s <- %s (%d)", r.RemoteAddr, err.Error(), statusCode)
 	w.WriteHeader(statusCode)
 	fmt.Fprint(w, err)
-}
-
-func log(level int, a ...any) {
-	var verbosity int
-	for i, l := range []bool{true /*no verbosity*/, cli.Verbose} { // will eventually add very verbose flag
-		if l {
-			verbosity = i
-		}
-	}
-
-	if level > verbosity {
-		return
-	}
-
-	fmt.Printf("[%s] ", time.Now().Format(time.DateTime))
-	fmt.Println(a...)
 }
