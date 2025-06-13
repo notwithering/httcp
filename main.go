@@ -305,10 +305,10 @@ func isAuthed(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func getOTP(w http.ResponseWriter, r *http.Request) (otp string, exit bool) {
+	otp = r.PathValue("otp")
 	exit = true
-	otps := r.PathValue("otp")
 
-	if otps == "" {
+	if otp == "" {
 		codeWrite(w, r, fmt.Errorf("otp empty"), http.StatusBadRequest)
 		return
 	}
