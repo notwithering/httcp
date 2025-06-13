@@ -65,6 +65,7 @@ func main() {
 		fmt.Fprint(w, "GET  /read/{otp}    - recieve data from connection\n")
 		fmt.Fprint(w, "POST /write/{otp}   - send data to connection\n")
 		fmt.Fprint(w, "POST /ping/{otp}    - reset connection timeout\n")
+		fmt.Fprint(w, "POST /close/{otp}   - close connection\n")
 
 		if cli.Password != "" {
 			fmt.Fprint(w, "\nserver requires password \"auth\" parameter (e.g. ?auth=password)")
@@ -137,10 +138,11 @@ func main() {
 			return
 		}
 
-		u, exit := getUser(w, r)
+		otp, exit := getOTP(w, r)
 		if exit {
 			return
 		}
+		u := users[otp]
 
 		u.lastReq = time.Now()
 
@@ -167,10 +169,11 @@ func main() {
 			return
 		}
 
-		u, exit := getUser(w, r)
+		otp, exit := getOTP(w, r)
 		if exit {
 			return
 		}
+		u := users[otp]
 
 		u.lastReq = time.Now()
 
@@ -200,12 +203,38 @@ func main() {
 			return
 		}
 
-		u, exit := getUser(w, r)
+		otp, exit := getOTP(w, r)
 		if exit {
 			return
 		}
+		u := users[otp]
 
 		u.lastReq = time.Now()
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+	http.HandleFunc("/close/{otp}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+
+		if checkMethod(w, r, http.MethodPost) {
+			return
+		}
+
+		if !isAuthed(w, r) {
+			return
+		}
+
+		otp, exit := getOTP(w, r)
+		if exit {
+			return
+		}
+		u := users[otp]
+
+		u.conn.Close()
+
+		mu.Lock()
+		users[otp] = nil
+		mu.Unlock()
 
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -275,11 +304,11 @@ func isAuthed(w http.ResponseWriter, r *http.Request) bool {
 	return authed
 }
 
-func getUser(w http.ResponseWriter, r *http.Request) (user *user, exit bool) {
+func getOTP(w http.ResponseWriter, r *http.Request) (otp string, exit bool) {
 	exit = true
-	otp := r.PathValue("otp")
+	otps := r.PathValue("otp")
 
-	if otp == "" {
+	if otps == "" {
 		codeWrite(w, r, fmt.Errorf("otp empty"), http.StatusBadRequest)
 		return
 	}
@@ -288,8 +317,7 @@ func getUser(w http.ResponseWriter, r *http.Request) (user *user, exit bool) {
 		return
 	}
 
-	user = users[otp]
-	return user, false
+	return otp, false
 }
 
 func codeWrite(w http.ResponseWriter, r *http.Request, err error, statusCode int) {
