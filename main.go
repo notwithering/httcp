@@ -71,6 +71,15 @@ func main() {
 			fmt.Fprint(w, "\nserver requires password \"auth\" parameter (e.g. ?auth=password)")
 		}
 	})
+	http.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if checkMethod(w, r, http.MethodGet) {
+			return
+		}
+
+		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f},"requirePassword":%v}`, cli.OTPLength, cli.TTL.Seconds(), cli.Password != "")
+	})
 	http.HandleFunc("/new/{address}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 
@@ -237,15 +246,6 @@ func main() {
 		mu.Unlock()
 
 		w.WriteHeader(http.StatusNoContent)
-	})
-	http.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		if checkMethod(w, r, http.MethodGet) {
-			return
-		}
-
-		fmt.Fprintf(w, `{"code":0,"otp":{"length":%d,"ttl":%f},"requirePassword":%v}`, cli.OTPLength, cli.TTL.Seconds(), cli.Password != "")
 	})
 
 	go func() {
